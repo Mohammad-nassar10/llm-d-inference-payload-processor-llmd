@@ -10,12 +10,10 @@ Every tracker plugin today independently re-parses the same fields from the requ
 
 ## Proposal
 
-
 ### New types in `pkg/framework`
 
 ```go
 // DataSource is the common interface for all data producers.
-// ObservationDataSource and PollingDataSource (future) both implement it.
 // Embeds Plugin (TypedName) aligned with EPP's DataSource definition.
 type DataSource interface {
     Plugin   // TypedName() TypedName
@@ -25,15 +23,22 @@ type DataSource interface {
 
 // ObservationDataSource is a DataSource driven by the request/response lifecycle.
 // ObservationSource implements this interface.
+// OutputType and ExtractorType enable the framework to wire compatible
+// ObservationExtractors automatically — aligned with EPP's type-matching pattern.
 type ObservationDataSource interface {
     DataSource
-    framework.RequestProcessor
-    framework.ResponseProcessor
-    RegisterExtractor(e ObservationExtractor)
+    RequestProcessor
+    ResponseProcessor
+    OutputType() reflect.Type    // type of observation this source produces
+    ExtractorType() reflect.Type // expected extractor interface type
 }
 
+// ObservationExtractor transforms parsed request/response observations into
+// per-model aggregate metrics stored in the datastore.
+// Implementations must be goroutine-safe.
 type ObservationExtractor interface {
     DataSource
+    ExpectedInputType() reflect.Type // must match ObservationDataSource.OutputType()
     ExtractRequest(ctx context.Context, obs RequestObservation) error
     ExtractResponse(ctx context.Context, obs ResponseObservation) error
 }
@@ -58,13 +63,13 @@ type ResponseObservation struct {
 **ProcessRequest:**
 1. Extract `model` and `max_tokens` from `request.Body` once.
 2. Build `RequestObservation` and write to CycleState.
-3. Call `ExtractRequest` on each registered extractor.
+3. Fan out to all compatible `ObservationExtractor` plugins (matched by the framework via type).
 
 **ProcessResponse:**
 1. Read `RequestObservation` from CycleState. If absent, return nil.
 2. Compute `Duration = time.Since(obs.StartTime)`.
 3. Extract `prompt_tokens` / `completion_tokens` from `response.Body["usage"]` once.
-4. Call `ExtractResponse` on each registered extractor.
+4. Fan out to all compatible `ObservationExtractor` plugins.
 
 Extractor errors are logged but do not fail the request.
 
@@ -81,19 +86,19 @@ type RunningRequestsCount struct {
 
 ### Registration in `runner.go`
 
+Both `ObservationSource` and `ConcurrencyExtractor` are registered as regular plugins.
+The framework wires them automatically by matching `ObservationSource.OutputType()` against `ConcurrencyExtractor.ExpectedInputType()`.
+
 ```go
-obsSrc := observationsource.New("observation-source", handle,
-    observationsource.NewConcurrencyExtractor(handle),
-)
-r.requestPlugins  = append(r.requestPlugins,  obsSrc)
-r.responsePlugins = append(r.responsePlugins, obsSrc)
+framework.Register(observationsource.PluginType,    observationsource.PluginFactory)
+framework.Register(concurrencyextractor.PluginType, concurrencyextractor.PluginFactory)
 ```
 
 `RunningRequestsTrackerPlugin` is removed from the pipeline.
 
 ## Future
 
-Additional extractors will be added to the same source without changes to existing code:
+Additional extractors will be added as regular plugins without changes to existing code:
 - **LatencyEMAExtractor** — per-model EMA of end-to-end latency
 - **Polling-based sources** — periodic scraping of inference pool `/metrics` endpoints for queue depth, KV-cache utilization, and LoRA adapter info
 
@@ -101,5 +106,5 @@ Additional extractors will be added to the same source without changes to existi
 
 1. Add `DataSource`, `ObservationDataSource`, `ObservationExtractor`, `RequestObservation`, `ResponseObservation` to `pkg/framework`
 2. Implement `ObservationSource` in `pkg/plugins/observationsource/`
-3. Implement `ConcurrencyExtractor` (migrated from `RunningRequestsTrackerPlugin`)
-4. Register `ObservationSource` in `runner.go`; remove `RunningRequestsTrackerPlugin`
+3. Implement `ConcurrencyExtractor` as a standalone plugin (migrated from `RunningRequestsTrackerPlugin`)
+4. Register both in `runner.go`; remove `RunningRequestsTrackerPlugin`
