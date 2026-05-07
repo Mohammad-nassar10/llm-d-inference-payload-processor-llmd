@@ -6,12 +6,21 @@ Introduce a `RequestNotificationSource` that collects per-request/response event
 **outside the plugin pipeline** via a buffered channel, and drives registered
 `RequestNotificationExtractor`s on a background tick to write aggregated statistics to the DataStore.
 
-## Problem
+## Goal
 
-Every tracker plugin today independently re-parses the same fields from the request body
-and writes to the DataStore on every single request. As more trackers are added:
-- Parsing overhead grows proportionally
-- DataStore writes (mutex contention) happen on every request on the hot path
+Track runtime information about inference requests to help make better routing decisions —
+for example, which model has the most in-flight requests, or which has the highest average
+latency. This information is read by the Model Selector (Filter / Score / Pick) when
+choosing where to route each request.
+
+## Requirements
+
+- **Non-blocking on the hot path** — collecting data must not add latency to request handling.
+- **Single parse** — request and response bodies are already parsed by `server.go`; tracking logic must not re-parse them.
+- **Multiple independent tracking logic** — different metrics (concurrency, latency, …) must be computable independently without coupling to each other.
+- **Extensible** — adding a new metric must not require changes to existing tracking logic.
+- **Off the plugin pipeline** — tracking is a background concern; it must not participate in the per-request plugin chain.
+
 
 ## Proposal
 
