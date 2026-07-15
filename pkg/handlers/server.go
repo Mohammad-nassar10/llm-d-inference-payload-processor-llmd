@@ -196,9 +196,15 @@ func (s *Server) Process(srv extProcPb.ExternalProcessor_ProcessServer) error {
 			responses, err = s.HandleResponseHeaders(ctx, reqCtx, v.ResponseHeaders)
 			loggerVerbose.Info("processing response headers complete")
 		case *extProcPb.ProcessingRequest_ResponseBody:
-			// Logged at TRACE: one line per stream chunk is a firehose under load (≈36 lines/request)
-			// that drowns scorer/extractor DEBUG logs. Use --v=5 to see it.
-			logger.V(logutil.TRACE).Info("Incoming response body chunk", "EoS", v.ResponseBody.EndOfStream)
+			// // Logged at TRACE: one line per stream chunk is a firehose under load (≈36 lines/request)
+			// // that drowns scorer/extractor DEBUG logs. Use --v=5 to see it.
+			// logger.V(logutil.TRACE).Info("Incoming response body chunk", "EoS", v.ResponseBody.EndOfStream)
+
+			loggerVerbose.Info("Incoming response body chunk", "EoS", v.ResponseBody.EndOfStream)
+			if responseBodyComplete {
+				loggerVerbose.Info("ignoring response body chunk delivered after EndOfStream")
+				continue
+			}
 			if reqCtx.ResponseFirstChunkTimestamp.IsZero() {
 				reqCtx.ResponseFirstChunkTimestamp = time.Now()
 			}
