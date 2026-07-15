@@ -144,6 +144,12 @@ func (s *Server) Process(srv extProcPb.ExternalProcessor_ProcessServer) error {
 	// An arbitrarily large body can OOM the code.
 	var requestBody []byte
 	var responseBody []byte
+	// Envoy can re-deliver the final body chunk after EndOfStream in
+	// FULL_DUPLEX_STREAMED mode (observed with >1MB bodies on Envoy 1.35+).
+	// Track completion so duplicates are ignored instead of being appended
+	// to the already-processed buffer, which corrupts it.
+	requestBodyComplete := false
+	responseBodyComplete := false
 
 	for {
 		select {
@@ -173,10 +179,15 @@ func (s *Server) Process(srv extProcPb.ExternalProcessor_ProcessServer) error {
 			loggerVerbose.Info("processing request headers complete")
 		case *extProcPb.ProcessingRequest_RequestBody:
 			loggerVerbose.Info("Incoming request body chunk", "EoS", v.RequestBody.EndOfStream)
+			if requestBodyComplete {
+				loggerVerbose.Info("ignoring request body chunk delivered after EndOfStream")
+				continue
+			}
 			requestBody = append(requestBody, v.RequestBody.Body...)
 			if !v.RequestBody.EndOfStream {
 				continue
 			}
+			requestBodyComplete = true
 			responses, err = s.HandleRequestBody(ctx, reqCtx, requestBody)
 			loggerVerbose.Info("processing request body complete")
 		case *extProcPb.ProcessingRequest_RequestTrailers:
@@ -206,9 +217,22 @@ func (s *Server) Process(srv extProcPb.ExternalProcessor_ProcessServer) error {
 			}
 
 			if v.ResponseBody.EndOfStream {
+				responseBodyComplete = true
 				reqCtx.ResponseCompleteTimestamp = time.Now()
 				model, _ := reqCtx.Request.Body["model"].(string)
 				metrics.RecordRequestTTFT(model, reqCtx.ResponseFirstChunkTimestamp.Sub(reqCtx.RequestReceivedTimestamp))
+
+				// Notify the data layer of the completed response.
+				s.eventNotifier.Notify(datasource.Event{
+					Type: datasource.ResponseEventType,
+					Payload: datasource.ResponsePayload{
+						Request:    reqCtx.Request,
+						Response:   reqCtx.Response,
+						CycleState: reqCtx.CycleState,
+						Duration:   reqCtx.ResponseCompleteTimestamp.Sub(reqCtx.RequestReceivedTimestamp),
+						TTFT:       reqCtx.ResponseFirstChunkTimestamp.Sub(reqCtx.RequestSentTimestamp),
+					},
+				})
 			}
 		case *extProcPb.ProcessingRequest_ResponseTrailers:
 			responses, err = s.HandleResponseTrailers(v.ResponseTrailers)
