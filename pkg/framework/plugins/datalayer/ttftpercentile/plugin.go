@@ -41,6 +41,11 @@ const (
 	// from the request event to the matching response event.
 	inflightAtDispatchKey = "ttft-percentile/inflight-at-dispatch"
 
+	// requestIDHeaderKey is the request-id request header, logged with each ttft-observation so
+	// an offline analysis can pair the actual TTFT with the scorer's predicted effectiveTTFT
+	// (which logs the same id via the request-context logger). Debug-only.
+	requestIDHeaderKey = "x-request-id"
+
 	defaultWindowSize        = 5000
 	defaultMaxObservationAge = 3 * time.Minute // observations older than this are never used
 	defaultIntervalDuration  = 5 * time.Second
@@ -278,17 +283,19 @@ func (e *TTFTPercentileExtractor) Extract(ctx context.Context, events []dlsrc.Ev
 			if s.Requests--; s.Requests < 0 {
 				s.Requests = 0
 			}
-			if p.TTFT > 0 {
-				ttft := p.TTFT.Seconds()
-				var inflightAtDispatch int64
-				if p.CycleState != nil {
-					inflightAtDispatch, _ = plugin.ReadCycleStateKey[int64](p.CycleState, inflightAtDispatchKey)
-				}
-				s.tracker.add(ttft, inflightAtDispatch, now)
-				if debugLogger.Enabled() {
-					debugLogger.Info("ttft-observation",
-						"model", model, "ttft_s", ttft, "inflightAtDispatch", inflightAtDispatch,
-					)
+			if p.TTFT > 0 && p.CycleState != nil {
+				// Record the observation only when its inflight-at-dispatch resolves. A missing
+				// CycleState or key would default to 0, dragging inflightAtP25/P50 downward and
+				// making the model look less loaded than it was — so skip it rather than record a 0.
+				if inflightAtDispatch, err := plugin.ReadCycleStateKey[int64](p.CycleState, inflightAtDispatchKey); err == nil {
+					ttft := p.TTFT.Seconds()
+					s.tracker.add(ttft, inflightAtDispatch, now)
+					if debugLogger.Enabled() {
+						debugLogger.Info("ttft-observation",
+							"x-request-id", p.Request.Headers[requestIDHeaderKey],
+							"model", model, "ttft_s", ttft, "inflightAtDispatch", inflightAtDispatch,
+						)
+					}
 				}
 			}
 			if now.Sub(s.intervalStart) >= e.intervalDuration {
