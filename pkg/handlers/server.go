@@ -178,9 +178,9 @@ func (s *Server) Process(srv extProcPb.ExternalProcessor_ProcessServer) error {
 			responses = s.HandleRequestHeaders(ctx, reqCtx, v.RequestHeaders)
 			loggerVerbose.Info("processing request headers complete")
 		case *extProcPb.ProcessingRequest_RequestBody:
-			loggerVerbose.Info("Incoming request body chunk", "EoS", v.RequestBody.EndOfStream)
+			logger.V(logutil.TRACE).Info("Incoming request body chunk", "EoS", v.RequestBody.EndOfStream)
 			if requestBodyComplete {
-				loggerVerbose.Info("ignoring request body chunk delivered after EndOfStream")
+				logger.V(logutil.TRACE).Info("ignoring request body chunk delivered after EndOfStream")
 				continue
 			}
 			requestBody = append(requestBody, v.RequestBody.Body...)
@@ -198,11 +198,11 @@ func (s *Server) Process(srv extProcPb.ExternalProcessor_ProcessServer) error {
 		case *extProcPb.ProcessingRequest_ResponseBody:
 			// // Logged at TRACE: one line per stream chunk is a firehose under load (≈36 lines/request)
 			// // that drowns scorer/extractor DEBUG logs. Use --v=5 to see it.
-			// logger.V(logutil.TRACE).Info("Incoming response body chunk", "EoS", v.ResponseBody.EndOfStream)
+			logger.V(logutil.TRACE).Info("Incoming response body chunk", "EoS", v.ResponseBody.EndOfStream)
 
-			loggerVerbose.Info("Incoming response body chunk", "EoS", v.ResponseBody.EndOfStream)
+			// loggerVerbose.Info("Incoming response body chunk", "EoS", v.ResponseBody.EndOfStream)
 			if responseBodyComplete {
-				loggerVerbose.Info("ignoring response body chunk delivered after EndOfStream")
+				logger.V(logutil.TRACE).Info("ignoring response body chunk delivered after EndOfStream")
 				continue
 			}
 			if reqCtx.ResponseFirstChunkTimestamp.IsZero() {
@@ -219,7 +219,7 @@ func (s *Server) Process(srv extProcPb.ExternalProcessor_ProcessServer) error {
 				loggerVerbose.Info("processing response body complete")
 			} else {
 				responses, err = s.HandleResponseChunk(ctx, reqCtx, v.ResponseBody.Body, v.ResponseBody.EndOfStream)
-				loggerVerbose.Info("response chunk processing complete")
+				logger.V(logutil.TRACE).Info("response chunk processing complete")
 			}
 
 			if v.ResponseBody.EndOfStream {
