@@ -73,6 +73,9 @@ func (t *slidingWindowTracker) window(now time.Time, maxAge time.Duration, maxN 
 
 // percentileOf returns the p-th percentile value of a value-sorted slice by linear interpolation.
 func percentileOf(sorted []observation, p float64) float64 {
+	if len(sorted) == 0 {
+		return 0
+	}
 	idx := p * float64(len(sorted)-1)
 	lo := int(idx)
 	if lo+1 >= len(sorted) {
@@ -111,6 +114,9 @@ func dropMinMax(sorted []float64) []float64 {
 // a value-sorted slice. Averaging a band rather than a single point stabilises the estimate.
 func bandInflight(sorted []observation, p float64) float64 {
 	n := len(sorted)
+	if n == 0 {
+		return 0
+	}
 	lo := int((p - 0.10) * float64(n-1))
 	if lo < 0 {
 		lo = 0
